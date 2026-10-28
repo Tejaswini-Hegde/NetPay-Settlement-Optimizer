@@ -1,0 +1,6 @@
+.env
+*.db
+*.log
+ledger.json
+__pycache__/
+venv/
