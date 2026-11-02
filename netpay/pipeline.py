@@ -6,12 +6,12 @@ from .models import Obligation, Payment
 
 
 def plan_id_for(obligations: list[Obligation]) -> str:
-    raw = "|".join(sorted(f"{o.id}:{o.debtor}:{o.creditor}:{o.amount_cents}:{o.currency}" for o in obligations))
+    raw = "|".join(sorted(f"{o.id}:{o.debtor}:{o.creditor}:{o.amount_units}:{o.currency}" for o in obligations))
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def request_key(plan_id: str, i: int, p: Payment) -> str:
-    raw = f"{plan_id}:{i}:{p.payer}:{p.payee}:{p.amount_cents}:{p.currency}"
+    raw = f"{plan_id}:{i}:{p.payer}:{p.payee}:{p.amount_units}:{p.currency}"
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
@@ -28,7 +28,7 @@ def execute_plan(plan_id: str, payments: list[Payment], client, ledger, approved
         if row:
             invoice_id = row["invoice_id"]          # drafted earlier; just finish sending
         else:
-            invoice_id = client.create_draft_invoice(p.payer, p.amount_cents, p.currency,
+            invoice_id = client.create_draft_invoice(p.payer, p.amount_units, p.currency,
                                                      f"NetPay settlement {plan_id}", request_id=key)
             ledger.record(key, plan_id, p, invoice_id, "DRAFTED")
         client.send_invoice(invoice_id, request_id=key + "-send")

@@ -2,14 +2,18 @@
 from __future__ import annotations
 import time
 from .config import Settings
+from .money import format_currency_amount
 
 
 class PayPalError(RuntimeError):
     pass
 
 
-def _fmt(cents: int) -> str:
-    return f"{cents // 100}.{cents % 100:02d}"
+def _fmt(units: int, currency: str) -> str:
+    try:
+        return format_currency_amount(units, currency)
+    except ValueError as exc:
+        raise PayPalError(str(exc)) from exc
 
 
 class PayPalClient:
@@ -50,13 +54,15 @@ class PayPalClient:
             return r.json() if r.text else {}
         raise PayPalError("unreachable")
 
-    def create_draft_invoice(self, recipient_email: str, amount_cents: int, currency: str,
+    def create_draft_invoice(self, recipient_email: str, amount_units: int, currency: str,
                              note: str, request_id: str) -> str:
+        currency = currency.strip().upper()
         body = {
             "detail": {"currency_code": currency, "note": note},
             "primary_recipients": [{"billing_info": {"email_address": recipient_email}}],
             "items": [{"name": "NetPay settlement", "quantity": "1",
-                       "unit_amount": {"currency_code": currency, "value": _fmt(amount_cents)}}],
+                       "unit_amount": {"currency_code": currency,
+                                       "value": _fmt(amount_units, currency)}}],
         }
         res = self._call("POST", "/v2/invoicing/invoices", body, request_id)
         href = res.get("href", "")

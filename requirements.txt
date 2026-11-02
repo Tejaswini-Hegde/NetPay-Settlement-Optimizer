@@ -1,0 +1,3 @@
+requests
+python-dotenv
+Babel>=2.16,<3

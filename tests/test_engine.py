@@ -2,6 +2,7 @@ import random
 import unittest
 from netpay import (Obligation, build_plan, verify_plan, net_balances,
                     greedy_settle, exact_settle, components, estimate_fees)
+from netpay.money import format_amount, format_currency_amount, to_units
 
 
 def ob(i, d, c, amt, ccy="USD"):
@@ -18,7 +19,7 @@ class TestEngine(unittest.TestCase):
         plan = build_plan([ob(1, "A", "B", 100), ob(2, "B", "C", 100)])
         self.assertEqual(len(plan.payments), 1)
         p = plan.payments[0]
-        self.assertEqual((p.payer, p.payee, p.amount_cents), ("A", "C", 100))
+        self.assertEqual((p.payer, p.payee, p.amount_units), ("A", "C", 100))
 
     def test_independent_groups_do_not_mix(self):
         obs = [ob(1, "A", "B", 50), ob(2, "X", "Y", 70)]
@@ -43,6 +44,24 @@ class TestEngine(unittest.TestCase):
         with self.assertRaises(TypeError):
             Obligation("1", "A", "B", 10.5)
 
+    def test_four_decimal_unit_settlement(self):
+        obligation = Obligation("1", "Alice", "Bob", to_units("12.3456"))
+        plan = build_plan([obligation])
+        self.assertEqual(plan.payments[0].amount_units, 123_456)
+        self.assertEqual(format_amount(plan.payments[0].amount_units), "12.3456")
+        with self.assertRaisesRegex(ValueError, "at most 4 decimal places"):
+            to_units("12.34567")
+        with self.assertRaisesRegex(ValueError, "at most 4 decimal places"):
+            to_units("0.00001")
+
+    def test_currency_codes_and_minor_unit_formatting(self):
+        self.assertEqual(to_units("12.345", "KWD"), 123_450)
+        self.assertEqual(format_currency_amount(123_450, "KWD"), "12.345")
+        self.assertEqual(format_currency_amount(12_000_000, "JPY"), "1200")
+        self.assertEqual(format_currency_amount(1_200_000, "USD"), "120.00")
+        with self.assertRaisesRegex(ValueError, "unknown ISO 4217"):
+            to_units("1", "ZZZ")
+
     def test_verify_catches_wrong_plan(self):
         obs = [ob(1, "A", "B", 100)]
         from netpay import Payment
@@ -51,7 +70,7 @@ class TestEngine(unittest.TestCase):
 
     def test_fee_estimate(self):
         plan = build_plan([ob(1, "A", "B", 10_000)])
-        self.assertEqual(estimate_fees(plan.payments, fixed_cents=30, bps=100), 130)
+        self.assertEqual(estimate_fees(plan.payments, fixed_units=30, bps=100), 130)
 
     def test_random_property(self):
         rng = random.Random(42)
@@ -70,8 +89,8 @@ class TestEngine(unittest.TestCase):
             # money conservation: every party's net position is fully settled
             nb = net_balances(obs)
             for pay in exact.payments:
-                nb[pay.payer] = nb.get(pay.payer, 0) + pay.amount_cents
-                nb[pay.payee] = nb.get(pay.payee, 0) - pay.amount_cents
+                nb[pay.payer] = nb.get(pay.payer, 0) + pay.amount_units
+                nb[pay.payee] = nb.get(pay.payee, 0) - pay.amount_units
             self.assertTrue(all(v == 0 for v in nb.values()))
 
 

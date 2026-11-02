@@ -2,7 +2,8 @@
 from __future__ import annotations
 import json, re
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
+from .money import currency_precision, format_amount, to_units
 
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.I)
@@ -15,21 +16,23 @@ class Intent:
     currency: str
     item_name: str
     quantity: int
-    budget_cap_cents: int | None
+    budget_cap_units: int | None
 
 
-def _cents(value) -> int:
+def _units(value, currency: str) -> int:
     try:
-        d = Decimal(str(value))
-    except InvalidOperation as e:
+        units = to_units(value, currency)
+    except ValueError as e:
         raise ValueError(f"bad amount: {value!r}") from e
-    if d <= 0:
+    if units <= 0:
         raise ValueError("amount must be positive")
-    return int((d * 100).to_integral_value())
+    return units
 
 
 def parse_intent(raw) -> Intent:
-    data = raw if isinstance(raw, dict) else json.loads(_FENCE.sub("", str(raw).strip()))
+    data = raw if isinstance(raw, dict) else json.loads(
+        _FENCE.sub("", str(raw).strip()), parse_float=Decimal
+    )
     if data.get("action") != "CREATE_INVOICE":
         raise ValueError(f"unsupported action: {data.get('action')!r}")
     email = str(data.get("recipient", "")).strip()
@@ -38,6 +41,7 @@ def parse_intent(raw) -> Intent:
     ccy = str(data.get("target_currency", "")).strip().upper()
     if not re.fullmatch(r"[A-Z]{3}", ccy):
         raise ValueError(f"invalid currency: {ccy!r}")
+    currency_precision(ccy)
     try:
         qty = int(str(data.get("quantity", "")).strip())
     except ValueError as e:
@@ -48,9 +52,19 @@ def parse_intent(raw) -> Intent:
     if not item:
         raise ValueError("item_name missing")
     cap = data.get("source_budget_cap")
-    return Intent("CREATE_INVOICE", email, ccy, item, qty, _cents(cap) if cap not in (None, "") else None)
+    return Intent(
+        "CREATE_INVOICE",
+        email,
+        ccy,
+        item,
+        qty,
+        _units(cap, ccy) if cap not in (None, "") else None,
+    )
 
 
-def enforce_budget(total_cents: int, intent: Intent) -> None:
-    if intent.budget_cap_cents is not None and total_cents > intent.budget_cap_cents:
-        raise ValueError(f"total {total_cents} exceeds budget cap {intent.budget_cap_cents} (cents)")
+def enforce_budget(total_units: int, intent: Intent) -> None:
+    if intent.budget_cap_units is not None and total_units > intent.budget_cap_units:
+        raise ValueError(
+            f"total {format_amount(total_units)} exceeds budget cap "
+            f"{format_amount(intent.budget_cap_units)}"
+        )

@@ -9,7 +9,11 @@ class Ledger:
         self.db.row_factory = sqlite3.Row
         self.db.execute("""CREATE TABLE IF NOT EXISTS settlements(
             request_key TEXT PRIMARY KEY, plan_id TEXT, payer TEXT, payee TEXT,
-            amount_cents INTEGER, currency TEXT, invoice_id TEXT, status TEXT, updated_at REAL)""")
+            amount_units INTEGER, currency TEXT, invoice_id TEXT, status TEXT, updated_at REAL)""")
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(settlements)")}
+        if "amount_cents" in columns:
+            self.db.execute("UPDATE settlements SET amount_cents=amount_cents * 100")
+            self.db.execute("ALTER TABLE settlements RENAME COLUMN amount_cents TO amount_units")
         self.db.commit()
 
     def get(self, key: str):
@@ -18,7 +22,7 @@ class Ledger:
 
     def record(self, key, plan_id, p, invoice_id, status):
         self.db.execute("INSERT INTO settlements VALUES(?,?,?,?,?,?,?,?,?)",
-                        (key, plan_id, p.payer, p.payee, p.amount_cents, p.currency, invoice_id, status, time.time()))
+                        (key, plan_id, p.payer, p.payee, p.amount_units, p.currency, invoice_id, status, time.time()))
         self.db.commit()
 
     def set_status(self, key, status):

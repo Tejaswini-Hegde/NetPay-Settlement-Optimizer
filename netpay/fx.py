@@ -2,11 +2,11 @@ from __future__ import annotations
 from decimal import Decimal, ROUND_HALF_EVEN
 
 
-def convert_cents(cents: int, rate: Decimal) -> int:
-    """Convert minor units with banker's rounding. Assumes 2-decimal currencies."""
+def convert_units(units: int, rate: Decimal) -> int:
+    """Convert 1/10,000 currency units with banker's rounding."""
     if rate <= 0:
         raise ValueError("rate must be positive")
-    return int((Decimal(cents) * rate).quantize(Decimal(1), rounding=ROUND_HALF_EVEN))
+    return int((Decimal(units) * rate).quantize(Decimal(1), rounding=ROUND_HALF_EVEN))
 
 
 def fetch_rate(session, src: str, tgt: str) -> Decimal:

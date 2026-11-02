@@ -1,3 +1,4 @@
+
 """Deterministic settlement engine. No AI, no network: money math lives here only.
 
 Pipeline: obligations -> per-currency -> connected groups (Union-Find)
@@ -52,8 +53,8 @@ def net_balances(obligations: Iterable[Obligation]) -> dict[str, int]:
     """+ve => party is owed money overall, -ve => party owes money overall."""
     bal: dict[str, int] = defaultdict(int)
     for o in obligations:
-        bal[o.debtor] -= o.amount_cents
-        bal[o.creditor] += o.amount_cents
+        bal[o.debtor] -= o.amount_units
+        bal[o.creditor] += o.amount_units
     return {k: v for k, v in bal.items()}
 
 
@@ -162,25 +163,25 @@ def build_plan(obligations: list[Obligation], exact_limit: int = EXACT_LIMIT) ->
 def verify_plan(obligations: list[Obligation], payments: list[Payment]) -> None:
     """Hard invariants. Raise (never silently fix) if any fails - gate before PayPal calls."""
     for p in payments:
-        if p.amount_cents <= 0:
+        if p.amount_units <= 0:
             raise AssertionError(f"non-positive payment: {p}")
         if p.payer == p.payee:
             raise AssertionError(f"self payment: {p}")
     owed = defaultdict(int)  # (party, ccy) -> net still owed (+ve = still owed money)
     for o in obligations:
-        owed[(o.creditor, o.currency)] += o.amount_cents
-        owed[(o.debtor, o.currency)] -= o.amount_cents
+        owed[(o.creditor, o.currency)] += o.amount_units
+        owed[(o.debtor, o.currency)] -= o.amount_units
     for p in payments:
-        owed[(p.payer, p.currency)] += p.amount_cents
-        owed[(p.payee, p.currency)] -= p.amount_cents
+        owed[(p.payer, p.currency)] += p.amount_units
+        owed[(p.payee, p.currency)] -= p.amount_units
     bad = {k: v for k, v in owed.items() if v != 0}
     if bad:
         raise AssertionError(f"plan does not settle all balances: {bad}")
-    gross_obs = sum(o.amount_cents for o in obligations)
-    if sum(p.amount_cents for p in payments) > gross_obs:
+    gross_obs = sum(o.amount_units for o in obligations)
+    if sum(p.amount_units for p in payments) > gross_obs:
         raise AssertionError("plan moves more money than the original obligations")
 
 
-def estimate_fees(payments: list[Payment], fixed_cents: int = 0, bps: int = 0) -> int:
-    """Configurable fee model (placeholder rates - use PayPal's actual fee schedule)."""
-    return sum(fixed_cents + (p.amount_cents * bps + 5_000) // 10_000 for p in payments)
+def estimate_fees(payments: list[Payment], fixed_units: int = 0, bps: int = 0) -> int:
+    """Configurable fee model in 1/10,000 units (placeholder rates)."""
+    return sum(fixed_units + (p.amount_units * bps + 5_000) // 10_000 for p in payments)
