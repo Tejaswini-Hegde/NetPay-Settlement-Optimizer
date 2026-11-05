@@ -32,7 +32,8 @@ class FakeClient:
     def __init__(self, fail_send_on=None):
         self.drafts, self.sends, self.fail_send_on = [], [], fail_send_on
     def create_draft_invoice(self, email, units, ccy, note, request_id):
-        self.drafts.append(request_id); return f"INV-{len(self.drafts)}"
+        self.drafts.append((email, units, ccy, note, request_id))
+        return f"INV-{len(self.drafts)}"
     def send_invoice(self, inv, request_id):
         if self.fail_send_on == inv:
             self.fail_send_on = None; raise PayPalError("boom")
@@ -117,6 +118,23 @@ class TestApp(unittest.TestCase):
             execute_plan(pid, plan.payments, cl, led, approved=True)    # no-op
             self.assertEqual(len(cl.drafts), 2)                          # never duplicated
             self.assertEqual(sorted(cl.sends), ["INV-1", "INV-2"])
+
+    def test_execute_uses_payer_email_and_amount_note(self):
+        payment = Payment("Northstar Labs", "Bluebird Cafe", 12_500_000, "USD")
+        with tempfile.TemporaryDirectory() as d:
+            client = FakeClient()
+            execute_plan(
+                "plan",
+                [payment],
+                client,
+                Ledger(os.path.join(d, "t.db")),
+                approved=True,
+                payer_emails={"Northstar Labs": "northstar@example.com"},
+            )
+        email, units, currency, note, _ = client.drafts[0]
+        self.assertEqual(email, "northstar@example.com")
+        self.assertEqual((units, currency), (12_500_000, "USD"))
+        self.assertIn("You have to pay 1250 USD to Bluebird Cafe", note)
 
     def test_ledger_migrates_existing_cent_values(self):
         with tempfile.TemporaryDirectory() as d:

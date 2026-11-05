@@ -1,3 +1,4 @@
+import re
 import sys
 
 from netpay.ai import (
@@ -6,8 +7,30 @@ from netpay.ai import (
     AI_TIMEOUT_SECONDS,
     interpret_settlement_chat,
 )
+from netpay.config import Settings
 from netpay.engine import build_plan
+from netpay.ledger import Ledger
 from netpay.money import format_amount
+from netpay.paypal import PayPalClient, PayPalError
+from netpay.pipeline import execute_plan, plan_id_for
+
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _payer_emails(payments) -> dict[str, str] | None:
+    emails = {}
+    for payer in dict.fromkeys(payment.payer for payment in payments):
+        while True:
+            try:
+                email = input(f"Sandbox email address for {payer}: ").strip()
+            except EOFError:
+                print("\nInvoice sending cancelled.")
+                return None
+            if _EMAIL.fullmatch(email):
+                emails[payer] = email
+                break
+            print("Enter a valid email address.")
+    return emails
 
 
 if __name__ == "__main__":
@@ -77,5 +100,59 @@ if __name__ == "__main__":
                 f"{payment.payer} -> {payment.payee}: "
                 f"{format_amount(payment.amount_units)} {payment.currency}"
             )
-        print("\nThis is a plan only; no PayPal payment was sent.")
+        try:
+            wants_invoices = input(
+                "\nDo you want to send the invoices to the respective entities? (yes/no): "
+            ).strip().lower() == "yes"
+        except EOFError:
+            wants_invoices = False
+            print()
+        if not wants_invoices:
+            print("Invoice sending cancelled; no email addresses requested and no invoices sent.")
+            break
+
+        print(
+            "\nEnter each payer's PayPal sandbox email. "
+            "PayPal will send the invoice with the amount and payee in its note."
+        )
+        try:
+            settings = Settings.from_env()
+        except RuntimeError as exc:
+            print(f"\nCannot send invoices: {exc}", file=sys.stderr)
+            break
+        payer_emails = _payer_emails(plan.payments)
+        if payer_emails is None:
+            break
+
+        print("\nInvoices to send")
+        for payment in plan.payments:
+            print(
+                f"{payer_emails[payment.payer]} ({payment.payer}) pays "
+                f"{payment.payee}: {format_amount(payment.amount_units)} "
+                f"{payment.currency}"
+            )
+        try:
+            approved = input(
+                "Send these PayPal sandbox invoices? (yes/no): "
+            ).strip().lower() == "yes"
+        except EOFError:
+            approved = False
+            print()
+        if not approved:
+            print("Invoice sending cancelled; no invoices were sent.")
+            break
+
+        try:
+            invoice_ids = execute_plan(
+                plan_id_for(reply.obligations),
+                plan.payments,
+                PayPalClient(settings),
+                Ledger(),
+                approved=True,
+                payer_emails=payer_emails,
+            )
+        except PayPalError as exc:
+            print(f"\nInvoice sending failed: {exc}", file=sys.stderr)
+            break
+        print("Sent PayPal invoices:", ", ".join(invoice_ids) if invoice_ids else "none (already sent)")
         break

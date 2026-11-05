@@ -47,7 +47,11 @@ when required information is unclear. Currency codes are validated against
 Babel's CLDR currency registry; dollar signs alone do not identify a currency,
 so specify an ISO code such as `USD`. AI-extracted obligations must include
 source evidence and are checked before the deterministic engine builds a plan.
-The demo only displays proposed payments; it does not send them through PayPal.
+For a ready plan, the demo asks for each payer's PayPal sandbox email, displays
+the invoice amounts and recipients, and asks for explicit approval before
+sending invoices through PayPal. PayPal sends the invoice email; its note says
+what the payer owes and to whom. Set up sandbox credentials and confirm them
+with `python -m scripts.check_auth` before sending.
 This small local model cannot guarantee correct interpretation for every
 wording, so review extracted parties and payment directions.
 
