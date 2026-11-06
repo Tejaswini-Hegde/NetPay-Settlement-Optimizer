@@ -96,10 +96,10 @@ class TestLocalAIHandling(unittest.TestCase):
     def test_obligations_preserve_exact_amount_and_use_schema(self, post):
         post.return_value = FakeResponse(
             '{"clarifications":[],"obligations":[{"debtor":"A","creditor":"B",'
-            '"amount":"1.2345","currency":"USD","evidence":"A owes B $1.2345"}]}'
+            '"amount":"1.2345","currency":"USD","evidence":"A owes B 1.2345 USD"}]}'
         )
 
-        obligations = extract_obligations("A owes B $1.2345")
+        obligations = extract_obligations("A owes B 1.2345 USD")
 
         self.assertEqual(obligations[0].amount_units, 12_345)
         self.assertEqual(obligations[0].currency, "USD")
@@ -108,7 +108,52 @@ class TestLocalAIHandling(unittest.TestCase):
             post.call_args.kwargs["json"]["format"]["properties"].keys(),
             {"clarifications", "obligations"},
         )
-        self.assertIn("never assume USD", post.call_args.kwargs["json"]["messages"][0]["content"])
+        self.assertIn(
+            "never infer it",
+            post.call_args.kwargs["json"]["messages"][0]["content"],
+        )
+
+    @patch("netpay.ai.requests.post")
+    def test_chat_accepts_natural_wording_and_currency_name(self, post):
+        post.return_value = FakeResponse(
+            '{"assistant_message":"I found the debt.",'
+            '"status":"ready","clarifications":[],"obligations":['
+            '{"debtor":"A","creditor":"T","amount":"1000",'
+            '"currency":"INR",'
+            '"evidence":"A has to transfer T 1000 Indian rupees."}]}'
+        )
+
+        result = interpret_settlement_chat(
+            [{
+                "role": "user",
+                "content": "A has to transfer T 1000 Indian rupees.",
+            }]
+        )
+
+        self.assertEqual(result.status, "ready")
+        self.assertEqual(
+            (
+                result.obligations[0].debtor,
+                result.obligations[0].creditor,
+                result.obligations[0].amount_units,
+                result.obligations[0].currency,
+            ),
+            ("A", "T", 10_000_000, "INR"),
+        )
+        self.assertIn(
+            "full currency names",
+            post.call_args.kwargs["json"]["messages"][0]["content"],
+        )
+
+    @patch("netpay.ai.requests.post")
+    def test_ai_cannot_resolve_ambiguous_currency_symbol(self, post):
+        post.return_value = FakeResponse(
+            '{"clarifications":[],"obligations":[{"debtor":"A","creditor":"B",'
+            '"amount":"20","currency":"USD","evidence":"A owes B $20"}]}'
+        )
+
+        with self.assertRaisesRegex(AIRequestError, "does not establish USD"):
+            extract_obligations("A owes B $20")
 
     @patch("netpay.ai.requests.post")
     def test_reimbursement_language_preserves_payer_and_recipient(self, post):
@@ -184,6 +229,26 @@ class TestLocalAIHandling(unittest.TestCase):
                 ("Brightstar", "Northwind", 450_000, "USD"),
                 ("Northwind", "Acme Ltd", 200_000, "USD"),
             ],
+        )
+        post.assert_not_called()
+
+    @patch("netpay.ai.requests.post")
+    def test_chat_extracts_needs_to_pay_wording_without_llm(self, post):
+        result = interpret_settlement_chat(
+            [{"role": "user", "content": "A needs to pay T 1000 INR"}]
+        )
+
+        self.assertEqual(result.status, "ready")
+        self.assertEqual(len(result.obligations), 1)
+        obligation = result.obligations[0]
+        self.assertEqual(
+            (
+                obligation.debtor,
+                obligation.creditor,
+                obligation.amount_units,
+                obligation.currency,
+            ),
+            ("A", "T", 10_000_000, "INR"),
         )
         post.assert_not_called()
 

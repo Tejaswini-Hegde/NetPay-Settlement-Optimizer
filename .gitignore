@@ -3,4 +3,5 @@
 *.log
 ledger.json
 __pycache__/
+*.py[cod]
 venv/

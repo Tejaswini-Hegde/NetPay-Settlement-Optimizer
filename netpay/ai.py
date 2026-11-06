@@ -4,10 +4,12 @@ import re
 import time
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import lru_cache
 from typing import Any
 
 import requests
 from dotenv import load_dotenv
+from babel.numbers import get_currency_name, get_currency_symbol
 
 from netpay.models import Obligation
 from netpay.money import CURRENCY_CODES, to_units
@@ -52,6 +54,38 @@ class SettlementChatReply:
     status: str
     clarifications: list[str]
     obligations: list[Obligation]
+
+
+@lru_cache(maxsize=1)
+def _unambiguous_currency_symbols() -> frozenset[str]:
+    symbol_codes: dict[str, set[str]] = {}
+    for code in CURRENCY_CODES:
+        symbol = get_currency_symbol(code, locale="en")
+        if symbol and symbol != code:
+            symbol_codes.setdefault(symbol, set()).add(code)
+    return frozenset(
+        symbol for symbol, codes in symbol_codes.items() if len(codes) == 1
+    )
+
+
+def _evidence_supports_currency(currency: str, evidence: str) -> bool:
+    code = currency.upper()
+    if re.search(rf"(?<!\w){re.escape(code)}(?!\w)", evidence, re.IGNORECASE):
+        return True
+
+    for count in (1, 2):
+        name = get_currency_name(code, count=count, locale="en")
+        if name and re.search(
+            rf"(?<!\w){re.escape(name)}(?!\w)", evidence, re.IGNORECASE
+        ):
+            return True
+
+    symbol = get_currency_symbol(code, locale="en")
+    return (
+        symbol not in {"$", "£", "¥"}
+        and symbol in _unambiguous_currency_symbols()
+        and symbol in evidence
+    )
 
 
 def _generate_content(
@@ -168,6 +202,11 @@ def _validate_obligations(
                 f"Obligation {idx} evidence must name both parties; "
                 "no settlement plan was created."
             )
+        if not _evidence_supports_currency(currency, evidence):
+            raise AIRequestError(
+                f"Obligation {idx} evidence does not establish {currency.upper()} "
+                "unambiguously; no settlement plan was created."
+            )
 
         obligations.append(
             Obligation(
@@ -252,22 +291,28 @@ is missing or conflicts on a fact needed to build the plan. Ask concise,
 specific follow-up questions in both assistant_message and clarifications.
 Do not ask generic questions such as whether the user has anything else to add.
 Use "ready" only when every obligation to be included has a clear debtor,
-creditor, exact amount, and explicit currency. Use "no_obligations" when the
-user confirms there are no current debts or asks to stop.
+creditor, exact amount, and currency supported by the conversation. Interpret
+ISO codes, full currency names, and unambiguous currency symbols as their ISO
+codes. If a name or symbol could refer to multiple currencies (for example,
+"dollars", "$", or "¥"), ask which currency instead of guessing. Use
+"no_obligations" when the user confirms there are no current debts or asks to
+stop.
 
 When ready, return every current obligation supported by the conversation.
 Amounts must be plain decimal strings with no currency symbol. Currency must
-be a three-letter ISO code explicit in the conversation; do not assume USD.
-Each obligation's evidence must be the shortest verbatim text that states that
-single debt and supports its parties, direction, amount, and currency. Do not
-include evidence spanning multiple debts. Do not output obligations while
-status is chat or clarify. Return only data matching the JSON schema.
+be a three-letter ISO code recognized by CLDR. Do not assume a currency from
+the user's location, language, or an ambiguous symbol/name. Each obligation's
+evidence must be the shortest verbatim text that states that single debt and
+supports its parties, direction, amount, and currency. Do not include evidence
+spanning multiple debts or obligations not stated by the user. Do not output
+obligations while status is chat or clarify. Return only data matching the
+JSON schema.
 """
 
 
 _EXPLICIT_DEBT_PATTERN = re.compile(
     r"^\s*(?P<debtor>[A-Za-z][A-Za-z0-9&.'’-]*(?:\s+[A-Za-z][A-Za-z0-9&.'’-]*?)*)"
-    r"\s+(?:owes|must\s+pay|has\s+to\s+pay)\s+"
+    r"\s+(?:owes|must\s+pay|has\s+to\s+pay|needs?\s+to\s+pay)\s+"
     r"(?P<creditor>[A-Za-z][A-Za-z0-9&.'’-]*(?:\s+[A-Za-z][A-Za-z0-9&.'’-]*?)*)"
     r"\s+(?:(?P<symbol>[$€£])\s*)?(?:(?P<currency_before>(?-i:[A-Z]{3}))\s*)?"
     r"(?P<amount>(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,4})?)"
@@ -296,7 +341,9 @@ def _extract_explicit_debts(message: str) -> SettlementChatReply | None:
     matches = []
     for clause in clauses:
         if not re.search(
-            r"\b(?:owes|must\s+pay|has\s+to\s+pay)\b", clause, re.IGNORECASE
+            r"\b(?:owes|must\s+pay|has\s+to\s+pay|needs?\s+to\s+pay)\b",
+            clause,
+            re.IGNORECASE,
         ):
             continue
         match = _EXPLICIT_DEBT_PATTERN.match(clause)
@@ -477,10 +524,12 @@ means the speaker; if no name is given, use the literal label "me". Do not ask
 for a real name just to understand direction.
 
 Do not guess, reverse, merge, split, or omit debts. Amounts must be plain
-decimal strings, with no symbols or words. Currency must be an explicit,
-unambiguous three-letter ISO code; never assume USD. Include exact source text
-as evidence for every debt. If a necessary fact is unclear or contradictory,
-exclude that debt and ask one specific clarification instead of guessing.
+decimal strings, with no symbols or words. Convert an explicit ISO code, full
+currency name, or unambiguous currency symbol into its three-letter ISO code.
+If a currency name or symbol is ambiguous, ask which currency; never infer it
+from location or language. Include exact source text as evidence for every
+debt. If a necessary fact is unclear or contradictory, exclude that debt and
+ask one specific clarification instead of guessing.
 Return only JSON matching the supplied schema.
 
 Text:
